@@ -36,6 +36,5 @@ AUTHORIZED_ROLE_ID = 1143359866260963467  # Replace with your authorized role ID
 
 Server stats window is updated every 30 seconds.
 
-I will continue to improve the code and post updates in this thread.
 
-*Brought to you by Valhalla Community - click my profile for invite link.*
+https://www.thevalhallacommunity.com/home
