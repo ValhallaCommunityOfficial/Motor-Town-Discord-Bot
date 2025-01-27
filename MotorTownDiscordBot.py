@@ -127,20 +127,25 @@ async def remove_mt_stats(interaction: discord.Interaction):
     elif tracking_channel != interaction.channel:
         await interaction.response.send_message("Player statistics updates are not running in this channel.", ephemeral=True)
 
+
 @tasks.loop(seconds=30)  # Run the update task every 30 seconds
 async def update_stats(interaction, message):
     """Updates the player statistics every 30 seconds in the specified channel."""
     global status_message
     if tracking_channel and message:   # Check that a channel and message are set
+      try:
         count_data, list_data, server_online = await fetch_player_data()  # Fetch updated API data
         if count_data and list_data:
             embed = await create_embed(count_data, list_data, server_online)  # Generate the updated embed
             if embed:
                try:
-                    await interaction.followup.edit_message(message_id=message.id, embed=embed) #Edit message using message id
+                    await interaction.followup.edit_message(message_id=message.id, embed=embed)  # Edit the existing status message using the id
                except discord.errors.HTTPException as e:
-                  logging.error(f"Error editing message: {e}", exc_info=True)
-                  status_message = None
+                    logging.error(f"Error editing message: {e}", exc_info=True) # Log an error if the message can't be edited
+                    status_message = None
+      except Exception as e:
+         logging.error(f"Error during update_stats task: {e}", exc_info=True) # log all other errors during the task
+         status_message = None #reset the message
 
 @bot.tree.command(name="mtmsg", description="Sends a message to the game server chat.")
 @has_authorized_role()
@@ -232,7 +237,6 @@ async def mt_kick(interaction: discord.Interaction, player_name: str):
         logging.error(f"Error retrieving player list: {e}")
         await interaction.followup.send(f"Error retrieving player list: {e}", ephemeral=True)
 
-
 @bot.tree.command(name="mtunban", description="Unbans a player from the server.")
 @has_authorized_role()
 async def mt_unban(interaction: discord.Interaction, player_name: str):
@@ -286,6 +290,7 @@ async def mt_showbanned(interaction: discord.Interaction):
     except requests.exceptions.RequestException as e:
         logging.error(f"Error retrieving ban list: {e}")
         await interaction.followup.send(f"Error retrieving ban list: {e}", ephemeral=True)
+
 
 @bot.event
 async def on_ready():
