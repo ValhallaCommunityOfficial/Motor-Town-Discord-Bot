@@ -4,6 +4,7 @@ import requests
 import json
 import logging
 import asyncio
+import random
 
 # Made by KodeMan - https://www.thevalhallacommunity.com - Discord.gg/valhallacommunity
 
@@ -22,7 +23,6 @@ bot = commands.Bot(command_prefix="/", intents=intents, sync_commands=True)
 tracking_channel_id = None
 status_message = None
 
-
 def has_authorized_role():
     """Check if the user has the authorized role."""
     async def predicate(ctx):
@@ -36,27 +36,29 @@ def has_authorized_role():
     return commands.check(predicate)
 
 async def fetch_player_data():
-    """Fetches player count and player list data from the API."""
+    """Fetches player count and player list data from the API with backoff retry."""
     player_count_url = f"{API_BASE_URL}/player/count?password={API_PASSWORD}"
     player_list_url = f"{API_BASE_URL}/player/list?password={API_PASSWORD}"
     
     max_retries = 3
     for attempt in range(max_retries):
         try:
-          count_response = requests.get(player_count_url, timeout=5)
-          count_response.raise_for_status()
-          count_data = count_response.json()
-    
-          list_response = requests.get(player_list_url, timeout=5)
-          list_response.raise_for_status()
-          list_data = list_response.json()
-          return count_data, list_data, True
+            count_response = requests.get(player_count_url, timeout=5)
+            count_response.raise_for_status()
+            count_data = count_response.json()
+        
+            list_response = requests.get(player_list_url, timeout=5)
+            list_response.raise_for_status()
+            list_data = list_response.json()
+            return count_data, list_data, True
     
         except requests.exceptions.RequestException as e:
             logging.error(f"Error fetching API Data (attempt {attempt + 1}/{max_retries}): {e}")
             if attempt == max_retries - 1:
                 return None, None, False
-            await asyncio.sleep(5)
+            retry_delay = (2 ** attempt) + random.uniform(0,1)
+            await asyncio.sleep(retry_delay)
+
 
 async def create_embed(count_data, list_data, server_online):
     """Creates a Discord Embed with formatted player data."""
@@ -66,7 +68,7 @@ async def create_embed(count_data, list_data, server_online):
     player_list = list_data["data"]
 
     if server_online:
-      embed = discord.Embed(title="Brought to you by Valhalla Community - Discord.gg/valhallacommunity - Change me in the code", color=discord.Color.blue())
+      embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.blue())
       embed.add_field(name="Server Status", value="Server is Online", inline=False)
       embed.add_field(name="Players Online", value=f"{num_players}", inline=False)
     
@@ -77,7 +79,7 @@ async def create_embed(count_data, list_data, server_online):
           embed.add_field(name="Player Names", value="No players online", inline=False)
       
     else:
-      embed = discord.Embed(title="Brought to you by Valhalla Community - Discord.gg/valhallacommunity - Change me in the code", color=discord.Color.red())
+      embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.red())
       embed.add_field(name="Server Status", value="Server is Offline", inline=False)
 
     return embed
@@ -137,28 +139,27 @@ async def update_stats():
             if count_data and list_data:
               embed = await create_embed(count_data, list_data, server_online)
               if embed:
-                  try:
-                      channel = bot.get_channel(tracking_channel_id)
-                      if channel:
-                        await status_message.edit(embed=embed)
-                      else:
-                        logging.error(f"Channel with id: {tracking_channel_id} not found, cannot update status message")
-                        status_message = None
-                        update_stats.stop()
-                  except discord.errors.HTTPException as e:
-                      logging.error(f"Error editing message: {e}", exc_info=True)
-                      status_message = None
-                      update_stats.stop()
+                try:
+                  channel = bot.get_channel(tracking_channel_id)
+                  if channel:
+                    await status_message.edit(embed=embed)
+                  else:
+                    logging.error(f"Channel with id: {tracking_channel_id} not found, cannot update status message")
+                    status_message = None
+                    update_stats.stop()
+                except discord.errors.HTTPException as e:
+                    logging.error(f"Error editing message: {e}", exc_info=True)
+                    status_message = None
+                    update_stats.stop()
             else:
                 logging.error("Error getting api data, will retry in 2 minutes")
                 update_stats.change_interval(seconds=120)
                 await asyncio.sleep(120)
                 update_stats.change_interval(seconds=30)
         except Exception as e:
-           logging.error(f"Error during update_stats task: {e}", exc_info=True)
-           status_message = None
-           update_stats.stop()
-
+            logging.error(f"Error during update_stats task: {e}", exc_info=True)
+            status_message = None
+            update_stats.stop()
 
 
 @bot.tree.command(name="mtmsg", description="Sends a message to the game server chat.")
