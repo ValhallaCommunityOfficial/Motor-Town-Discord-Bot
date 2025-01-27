@@ -19,8 +19,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="/", intents=intents, sync_commands=True)
-tracking_channel = None
+tracking_channel_id = None
 status_message = None
+
 
 def has_authorized_role():
     """Check if the user has the authorized role."""
@@ -98,8 +99,8 @@ async def create_banlist_embed(ban_data):
 @bot.tree.command(name="showmtstats", description="Activates server statistics updates in the current channel.")
 @has_authorized_role()
 async def show_mt_stats(interaction: discord.Interaction):
-    global tracking_channel, status_message
-    tracking_channel = interaction.channel
+    global tracking_channel_id, status_message
+    tracking_channel_id = interaction.channel_id
 
     if not update_stats.is_running():
       await interaction.response.defer()
@@ -108,7 +109,7 @@ async def show_mt_stats(interaction: discord.Interaction):
         embed = await create_embed(count_data, list_data, server_online)
         if embed:
           status_message = await interaction.followup.send(embed=embed)
-          update_stats.start(interaction, status_message)
+          update_stats.start()
           await interaction.followup.send("Player statistics updates started in this channel.", ephemeral=True)
     else:
         await interaction.response.send_message("Player statistics updates already running in this channel", ephemeral=True)
@@ -116,39 +117,49 @@ async def show_mt_stats(interaction: discord.Interaction):
 @bot.tree.command(name="removemtstats", description="Deactivates server statistics updates.")
 @has_authorized_role()
 async def remove_mt_stats(interaction: discord.Interaction):
-    global tracking_channel, status_message
-    if update_stats.is_running() and tracking_channel == interaction.channel:
+    global tracking_channel_id, status_message
+    if update_stats.is_running() and tracking_channel_id == interaction.channel_id:
         update_stats.cancel()
-        tracking_channel = None
+        tracking_channel_id = None
         status_message = None
         await interaction.response.send_message("Player statistics updates stopped in this channel", ephemeral=True)
-    elif tracking_channel == None:
+    elif tracking_channel_id == None:
       await interaction.response.send_message("Player statistics updates are not running", ephemeral=True)
-    elif tracking_channel != interaction.channel:
+    elif tracking_channel_id != interaction.channel_id:
         await interaction.response.send_message("Player statistics updates are not running in this channel.", ephemeral=True)
 
 @tasks.loop(seconds=30)
-async def update_stats(interaction, message):
-    global status_message
-    if tracking_channel and message:
-      try:
-        count_data, list_data, server_online = await fetch_player_data()
-        if count_data and list_data:
-            embed = await create_embed(count_data, list_data, server_online)
-            if embed:
-               try:
-                    await interaction.followup.edit_message(message_id=message.id, embed=embed)
-               except discord.errors.HTTPException as e:
-                    logging.error(f"Error editing message: {e}", exc_info=True)
-                    status_message = None
-        else:
-            logging.error("Error getting api data, will retry in 2 minutes")
-            update_stats.change_interval(seconds=120)
-            await asyncio.sleep(120)
-            update_stats.change_interval(seconds=30)
-      except Exception as e:
-         logging.error(f"Error during update_stats task: {e}", exc_info=True)
-         status_message = None
+async def update_stats():
+    global status_message, tracking_channel_id
+    if tracking_channel_id and status_message:
+        try:
+            count_data, list_data, server_online = await fetch_player_data()
+            if count_data and list_data:
+              embed = await create_embed(count_data, list_data, server_online)
+              if embed:
+                  try:
+                      channel = bot.get_channel(tracking_channel_id)
+                      if channel:
+                        await status_message.edit(embed=embed)
+                      else:
+                        logging.error(f"Channel with id: {tracking_channel_id} not found, cannot update status message")
+                        status_message = None
+                        update_stats.stop()
+                  except discord.errors.HTTPException as e:
+                      logging.error(f"Error editing message: {e}", exc_info=True)
+                      status_message = None
+                      update_stats.stop()
+            else:
+                logging.error("Error getting api data, will retry in 2 minutes")
+                update_stats.change_interval(seconds=120)
+                await asyncio.sleep(120)
+                update_stats.change_interval(seconds=30)
+        except Exception as e:
+           logging.error(f"Error during update_stats task: {e}", exc_info=True)
+           status_message = None
+           update_stats.stop()
+
+
 
 @bot.tree.command(name="mtmsg", description="Sends a message to the game server chat.")
 @has_authorized_role()
