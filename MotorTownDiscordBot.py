@@ -21,7 +21,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="/", intents=intents, sync_commands=True)
 tracking_channel_id = None
-status_message = None
+status_message_id = None  # Store the message ID instead of message object
 
 def has_authorized_role():
     """Check if the user has the authorized role."""
@@ -101,29 +101,32 @@ async def create_banlist_embed(ban_data):
 @bot.tree.command(name="showmtstats", description="Activates server statistics updates in the current channel.")
 @has_authorized_role()
 async def show_mt_stats(interaction: discord.Interaction):
-    global tracking_channel_id, status_message
+    global tracking_channel_id, status_message_id
     tracking_channel_id = interaction.channel_id
 
     if not update_stats.is_running():
-      await interaction.response.defer()
-      count_data, list_data, server_online = await fetch_player_data()
-      if count_data and list_data:
-        embed = await create_embed(count_data, list_data, server_online)
-        if embed:
-          status_message = await interaction.followup.send(embed=embed)
-          update_stats.start()
-          await interaction.followup.send("Player statistics updates started in this channel.", ephemeral=True)
+       await interaction.response.defer()
+       count_data, list_data, server_online = await fetch_player_data()
+       if count_data and list_data:
+          embed = await create_embed(count_data, list_data, server_online)
+          if embed:
+               # Convert the interaction to context
+               ctx = await commands.Context.from_interaction(interaction)
+               status_message = await ctx.send(embed=embed) # Use ctx.send to get the message object
+               status_message_id = status_message.id # Store only the message ID
+               update_stats.start() # Start the task
+               await interaction.followup.send("Player statistics updates started in this channel.", ephemeral=True)
     else:
         await interaction.response.send_message("Player statistics updates already running in this channel", ephemeral=True)
 
 @bot.tree.command(name="removemtstats", description="Deactivates server statistics updates.")
 @has_authorized_role()
 async def remove_mt_stats(interaction: discord.Interaction):
-    global tracking_channel_id, status_message
+    global tracking_channel_id, status_message_id
     if update_stats.is_running() and tracking_channel_id == interaction.channel_id:
         update_stats.cancel()
         tracking_channel_id = None
-        status_message = None
+        status_message_id = None
         await interaction.response.send_message("Player statistics updates stopped in this channel", ephemeral=True)
     elif tracking_channel_id == None:
       await interaction.response.send_message("Player statistics updates are not running", ephemeral=True)
@@ -132,8 +135,8 @@ async def remove_mt_stats(interaction: discord.Interaction):
 
 @tasks.loop(seconds=30)
 async def update_stats():
-    global status_message, tracking_channel_id
-    if tracking_channel_id and status_message:
+    global status_message_id, tracking_channel_id
+    if tracking_channel_id and status_message_id:
         try:
             count_data, list_data, server_online = await fetch_player_data()
             if count_data and list_data:
@@ -142,14 +145,19 @@ async def update_stats():
                 try:
                   channel = bot.get_channel(tracking_channel_id)
                   if channel:
-                    await status_message.edit(embed=embed)
+                      message = await channel.fetch_message(status_message_id) # fetch the message using the stored ID
+                      await message.edit(embed=embed) # edit the message
                   else:
                     logging.error(f"Channel with id: {tracking_channel_id} not found, cannot update status message")
-                    status_message = None
+                    status_message_id = None
                     update_stats.stop()
+                except discord.errors.NotFound as e:
+                  logging.error(f"Error editing message: {e}")
+                  status_message_id = None
+                  update_stats.stop()
                 except discord.errors.HTTPException as e:
-                    logging.error(f"Error editing message: {e}", exc_info=True)
-                    status_message = None
+                    logging.error(f"Error editing message: {e}")
+                    status_message_id = None
                     update_stats.stop()
             else:
                 logging.error("Error getting api data, will retry in 2 minutes")
@@ -158,7 +166,7 @@ async def update_stats():
                 update_stats.change_interval(seconds=30)
         except Exception as e:
             logging.error(f"Error during update_stats task: {e}", exc_info=True)
-            status_message = None
+            status_message_id = None
             update_stats.stop()
 
 
@@ -301,9 +309,9 @@ async def on_ready():
     """Event that gets called when the bot is ready."""
     print(f'Logged in as {bot.user.name}')
     try:
-      synced = await bot.tree.sync()
-      print(f'Synced {len(synced)} commands')
+        synced = await bot.tree.sync()
+        print(f'Synced {len(synced)} commands')
     except Exception as e:
-      logging.error(f"Error syncing commands: {e}")
+        logging.error(f"Error syncing commands: {e}")
 
 bot.run(TOKEN)
