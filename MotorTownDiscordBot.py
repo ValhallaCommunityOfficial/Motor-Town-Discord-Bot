@@ -55,33 +55,31 @@ async def fetch_player_data():
         except requests.exceptions.RequestException as e:
             logging.error(f"Error fetching API Data (attempt {attempt + 1}/{max_retries}): {e}")
             if attempt == max_retries - 1:
-                return None, None, False
+              return None, None, False
             retry_delay = (2 ** attempt) + random.uniform(0,1)
             await asyncio.sleep(retry_delay)
 
-
 async def create_embed(count_data, list_data, server_online):
     """Creates a Discord Embed with formatted player data."""
+    if not server_online:
+      embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.red())
+      embed.add_field(name="Server Status", value="Server is Offline", inline=False)
+      return embed
+    
     if not count_data or not list_data:
         return None
     num_players = count_data["data"]["num_players"]
     player_list = list_data["data"]
 
-    if server_online:
-      embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.blue())
-      embed.add_field(name="Server Status", value="Server is Online", inline=False)
-      embed.add_field(name="Players Online", value=f"{num_players}", inline=False)
+    embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.blue())
+    embed.add_field(name="Server Status", value="Server is Online", inline=False)
+    embed.add_field(name="Players Online", value=f"{num_players}", inline=False)
     
-      if player_list:
-          player_names = "\n".join([player["name"] for _, player in player_list.items()])
-          embed.add_field(name="Player Names", value=player_names, inline=False)
-      else:
-          embed.add_field(name="Player Names", value="No players online", inline=False)
-      
+    if player_list:
+        player_names = "\n".join([player["name"] for _, player in player_list.items()])
+        embed.add_field(name="Player Names", value=player_names, inline=False)
     else:
-      embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.red())
-      embed.add_field(name="Server Status", value="Server is Offline", inline=False)
-
+        embed.add_field(name="Player Names", value="No players online", inline=False)
     return embed
 
 async def create_banlist_embed(ban_data):
@@ -107,15 +105,14 @@ async def show_mt_stats(interaction: discord.Interaction):
     if not update_stats.is_running():
        await interaction.response.defer()
        count_data, list_data, server_online = await fetch_player_data()
-       if count_data and list_data:
-          embed = await create_embed(count_data, list_data, server_online)
-          if embed:
-               # Convert the interaction to context
-               ctx = await commands.Context.from_interaction(interaction)
-               status_message = await ctx.send(embed=embed) # Use ctx.send to get the message object
-               status_message_id = status_message.id # Store only the message ID
-               update_stats.start() # Start the task
-               await interaction.followup.send("Player statistics updates started in this channel.", ephemeral=True)
+       embed = await create_embed(count_data, list_data, server_online)
+       if embed:
+            # Convert the interaction to context
+            ctx = await commands.Context.from_interaction(interaction)
+            status_message = await ctx.send(embed=embed) # Use ctx.send to get the message object
+            status_message_id = status_message.id # Store only the message ID
+            update_stats.start() # Start the task
+            await interaction.followup.send("Player statistics updates started in this channel.", ephemeral=True)
     else:
         await interaction.response.send_message("Player statistics updates already running in this channel", ephemeral=True)
 
@@ -139,22 +136,21 @@ async def update_stats():
     if tracking_channel_id and status_message_id:
         try:
             count_data, list_data, server_online = await fetch_player_data()
-            if count_data and list_data:
-              embed = await create_embed(count_data, list_data, server_online)
-              if embed:
+            embed = await create_embed(count_data, list_data, server_online)
+            if embed:
                 try:
-                  channel = bot.get_channel(tracking_channel_id)
-                  if channel:
-                      message = await channel.fetch_message(status_message_id) # fetch the message using the stored ID
-                      await message.edit(embed=embed) # edit the message
-                  else:
-                    logging.error(f"Channel with id: {tracking_channel_id} not found, cannot update status message")
+                    channel = bot.get_channel(tracking_channel_id)
+                    if channel:
+                        message = await channel.fetch_message(status_message_id) # fetch the message using the stored ID
+                        await message.edit(embed=embed) # edit the message
+                    else:
+                        logging.error(f"Channel with id: {tracking_channel_id} not found, cannot update status message")
+                        status_message_id = None
+                        update_stats.stop()
+                except discord.errors.NotFound as e:
+                    logging.error(f"Error editing message: {e}")
                     status_message_id = None
                     update_stats.stop()
-                except discord.errors.NotFound as e:
-                  logging.error(f"Error editing message: {e}")
-                  status_message_id = None
-                  update_stats.stop()
                 except discord.errors.HTTPException as e:
                     logging.error(f"Error editing message: {e}")
                     status_message_id = None
