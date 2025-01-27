@@ -4,6 +4,8 @@ import requests
 import json
 import logging
 
+# Made by KodeMan - https://www.thevalhallacommunity.com - Discord.gg/valhallacommunity
+
 # Discord Bot Token and API Configuration
 TOKEN = ""  # Replace with your bot token
 API_BASE_URL = ""  # Replace with your server's API URL
