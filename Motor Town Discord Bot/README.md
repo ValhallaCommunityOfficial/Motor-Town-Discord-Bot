@@ -2,6 +2,9 @@ This is still in early access.
 
 You will need to know how to run python and create a discord bot.
 
+Download and install requirements
+```sudo pip3 install discord.py requests psutil matplotlib```
+
 Edit these lines near the top of the code for your configuration.
 ```
 TOKEN = ""  # Replace with your bot token
