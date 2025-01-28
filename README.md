@@ -7,11 +7,13 @@ Download and install requirements
 
 Edit these lines near the top of the code for your configuration.
 ```
-TOKEN = ""  # Replace with your bot token
-API_BASE_URL = ""  # Replace with your server's API URL
-API_PASSWORD = ""  # Replace with your API password
-AUTHORIZED_ROLE_ID = 1143359866260963467  # Replace with your authorized role ID
+TOKEN = "DISCORD_BOT_TOKEN" # Replace with your bot token
+API_BASE_URL = "API_BASE_URL" # Replace with your server's API URL
+API_PASSWORD = "API_PASSWORD" # Replace with your API password
+AUTHORIZED_ROLE_ID = 1143359866530963467 # Replace with the discord role ID for issuing commands
+WEBHOOK_URL = "WEBHOOK_URL"  # Replace with your webhook URL
 ```
+Added posting to a webhook when API cannot be reached with the message "Server cannot be reached. It has either crashed or restarted.
 
 **These Bot permissions are required**
 - Privileged Gateway Intents
