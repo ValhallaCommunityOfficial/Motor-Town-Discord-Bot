@@ -5,6 +5,7 @@ import json
 import logging
 import asyncio
 import random
+from datetime import datetime, timedelta
 
 # Made by KodeMan - https://www.thevalhallacommunity.com - Discord.gg/valhallacommunity
 
@@ -12,6 +13,7 @@ TOKEN = "DISCORD_BOT_TOKEN" # Replace with your bot token
 API_BASE_URL = "API_BASE_URL" # Replace with your server's API URL
 API_PASSWORD = "API_PASSWORD" # Replace with your API password
 AUTHORIZED_ROLE_ID = 1143359866530963467 # Replace with the discord role ID for issuing commands
+WEBHOOK_URL = "WEBHOOK_URL"  # Replace with your webhook URL
 
 # Enable basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,7 +23,14 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="/", intents=intents, sync_commands=True)
 tracking_channel_id = None
-status_message_id = None  # Store the message ID instead of message object
+status_message_id = None
+server_offline_message_sent = False
+webhook_message_id = None
+server_start_time = None # Store when server is first detected online
+
+# Define emojis
+GREEN_DOT = "<:green_circle:1252142135581163560>"
+RED_DOT = "<:red_circle:1252142033758459011>"
 
 def has_authorized_role():
     """Check if the user has the authorized role."""
@@ -35,8 +44,36 @@ def has_authorized_role():
         return role in ctx.author.roles
     return commands.check(predicate)
 
+async def send_webhook_message(message):
+    """Sends a message to the Discord webhook."""
+    global webhook_message_id
+    try:
+        data = {"content": message}
+        response = requests.post(WEBHOOK_URL, json=data)
+        response.raise_for_status()
+        logging.info(f"Webhook message sent successfully, response: {response.status_code}")
+        webhook_message_id = response.json()['id'] # Store the id of the webhook
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error sending webhook message: {e}")
+        return False
+    return True
+
+async def remove_webhook_message():
+    """Removes the message from the discord webhook"""
+    global webhook_message_id
+    try:
+        response = requests.delete(f'{WEBHOOK_URL}/messages/{webhook_message_id}')
+        response.raise_for_status()
+        logging.info(f"Removed webhook message: {response.status_code}")
+        webhook_message_id = None
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error removing webhook message: {e}")
+        return False
+    return True
+
 async def fetch_player_data():
     """Fetches player count and player list data from the API with backoff retry."""
+    global server_offline_message_sent, webhook_message_id, server_start_time
     player_count_url = f"{API_BASE_URL}/player/count?password={API_PASSWORD}"
     player_list_url = f"{API_BASE_URL}/player/list?password={API_PASSWORD}"
     
@@ -50,30 +87,56 @@ async def fetch_player_data():
             list_response = requests.get(player_list_url, timeout=5)
             list_response.raise_for_status()
             list_data = list_response.json()
+            if server_offline_message_sent:
+              await remove_webhook_message()
+              server_offline_message_sent = False
+            if server_start_time is None:
+                server_start_time = datetime.utcnow()
             return count_data, list_data, True
     
         except requests.exceptions.RequestException as e:
             logging.error(f"Error fetching API Data (attempt {attempt + 1}/{max_retries}): {e}")
             if attempt == max_retries - 1:
+              if not server_offline_message_sent:
+                await send_webhook_message("Server cannot be reached. It has either crashed or restarted.")
+                server_offline_message_sent = True
+                server_start_time = None
               return None, None, False
             retry_delay = (2 ** attempt) + random.uniform(0,1)
             await asyncio.sleep(retry_delay)
 
+def format_uptime():
+    """Calculates and formats the server uptime."""
+    global server_start_time
+    if server_start_time:
+        uptime = datetime.utcnow() - server_start_time
+        days = uptime.days
+        hours, remainder = divmod(uptime.seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        uptime_str = f"{days}d {hours}h {minutes}m {seconds}s" if days > 0 else f"{hours}h {minutes}m {seconds}s"
+        return uptime_str
+    else:
+      return "Offline"
+
 async def create_embed(count_data, list_data, server_online):
     """Creates a Discord Embed with formatted player data."""
+    uptime = format_uptime()
     if not server_online:
-      embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.red())
-      embed.add_field(name="Server Status", value="Server is Offline", inline=False)
-      return embed
+        embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.red())
+        embed.add_field(name="Server Status", value=f"{RED_DOT} Server is Offline", inline=False)
+        return embed
     
     if not count_data or not list_data:
         return None
     num_players = count_data["data"]["num_players"]
     player_list = list_data["data"]
 
-    embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.blue())
-    embed.add_field(name="Server Status", value="Server is Online", inline=False)
+
+    embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.green())
+    embed.add_field(name="Server Status", value=f"{GREEN_DOT} Server is Online", inline=False)
+    embed.add_field(name="Uptime", value=uptime, inline=False)
     embed.add_field(name="Players Online", value=f"{num_players}", inline=False)
+
     
     if player_list:
         player_names = "\n".join([player["name"] for _, player in player_list.items()])
@@ -124,6 +187,7 @@ async def remove_mt_stats(interaction: discord.Interaction):
         update_stats.cancel()
         tracking_channel_id = None
         status_message_id = None
+        server_start_time = None
         await interaction.response.send_message("Player statistics updates stopped in this channel", ephemeral=True)
     elif tracking_channel_id == None:
       await interaction.response.send_message("Player statistics updates are not running", ephemeral=True)
