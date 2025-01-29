@@ -34,7 +34,6 @@ Added posting to a webhook when API cannot be reached with the message "Server c
 ```/mtunban```
 ```/mtshowbanned```
 ```/mtmsg```
-**Sending server messages with /mtmsg does not work until someone can direct me the correct POST.**
 
 Server stats window is updated every 30 seconds.
 
