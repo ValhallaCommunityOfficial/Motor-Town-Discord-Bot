@@ -197,37 +197,39 @@ async def remove_mt_stats(interaction: discord.Interaction):
 @tasks.loop(seconds=30)
 async def update_stats():
     global status_message_id, tracking_channel_id
-    if tracking_channel_id and status_message_id:
-        try:
-            count_data, list_data, server_online = await fetch_player_data()
-            embed = await create_embed(count_data, list_data, server_online)
-            if embed:
-                try:
-                    channel = bot.get_channel(tracking_channel_id)
-                    if channel:
-                        message = await channel.fetch_message(status_message_id) # fetch the message using the stored ID
-                        await message.edit(embed=embed) # edit the message
-                    else:
-                        logging.error(f"Channel with id: {tracking_channel_id} not found, cannot update status message")
-                        status_message_id = None
-                        update_stats.stop()
-                except discord.errors.NotFound as e:
-                    logging.error(f"Error editing message: {e}")
+    if not tracking_channel_id or not status_message_id:
+        return
+    try:
+      
+        count_data, list_data, server_online = await fetch_player_data()
+        embed = await create_embed(count_data, list_data, server_online)
+        if embed:
+            try:
+                channel = bot.get_channel(tracking_channel_id)
+                if channel:
+                    message = await channel.fetch_message(status_message_id) # fetch the message using the stored ID
+                    await message.edit(embed=embed) # edit the message
+                else:
+                    logging.error(f"Channel with id: {tracking_channel_id} not found, cannot update status message")
                     status_message_id = None
                     update_stats.stop()
-                except discord.errors.HTTPException as e:
-                    logging.error(f"Error editing message: {e}")
-                    status_message_id = None
-                    update_stats.stop()
-            else:
-                logging.error("Error getting api data, will retry in 2 minutes")
-                update_stats.change_interval(seconds=120)
-                await asyncio.sleep(120)
-                update_stats.change_interval(seconds=30)
-        except Exception as e:
-            logging.error(f"Error during update_stats task: {e}", exc_info=True)
-            status_message_id = None
-            update_stats.stop()
+            except discord.errors.NotFound as e:
+              logging.error(f"Error editing message, message not found: {e}")
+              status_message_id = None
+              update_stats.stop()
+            except discord.errors.HTTPException as e:
+              logging.error(f"Error editing message: {e}")
+              status_message_id = None
+              update_stats.stop()
+        else:
+            logging.error("Error getting api data, will retry in 2 minutes")
+            update_stats.change_interval(seconds=120)
+            await asyncio.sleep(120)
+            update_stats.change_interval(seconds=30)
+    except Exception as e:
+      logging.error(f"Error during update_stats task: {e}", exc_info=True)
+      status_message_id = None
+      update_stats.stop()
 
 
 @bot.tree.command(name="mtmsg", description="Sends a message to the game server chat.")
