@@ -235,12 +235,10 @@ async def update_stats():
 @bot.tree.command(name="mtmsg", description="Sends a message to the game server chat.")
 @has_authorized_role()
 async def mt_msg(interaction: discord.Interaction, message: str):
-    chat_url = f"{API_BASE_URL}/chat?password={API_PASSWORD}"
+    url = f"{API_BASE_URL}/chat?password={API_PASSWORD}&message={message.replace(' ', '+')}"
     try:
         await interaction.response.defer()
-        headers = {'Content-Type': 'application/json'}
-        logging.info(f"Message Attempted: '{message}'")
-        response = requests.post(chat_url, headers=headers, json={"message": message})
+        response = requests.post(url)
         response.raise_for_status()
         logging.info(f"Sent message to server: {message}, Response code: {response.status_code}")
         await interaction.followup.send(f"Message sent to server chat: `{message}`")
