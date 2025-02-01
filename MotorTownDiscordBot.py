@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 import requests
 import json
@@ -12,7 +13,7 @@ from datetime import datetime, timedelta
 TOKEN = "DISCORD_BOT_TOKEN" # Replace with your bot token
 API_BASE_URL = "API_BASE_URL" # Replace with your server's API URL
 API_PASSWORD = "API_PASSWORD" # Replace with your API password
-AUTHORIZED_ROLE_ID = 1143359866530963467 # Replace with the discord role ID for issuing commands
+ADMIN_ROLE_ID = 1143359866530963467  # ID of the admin role
 WEBHOOK_URL = "WEBHOOK_URL"  # Replace with your webhook URL
 
 # Enable basic logging
@@ -26,23 +27,24 @@ tracking_channel_id = None
 status_message_id = None
 server_offline_message_sent = False
 webhook_message_id = None
-server_start_time = None # Store when server is first detected online
+server_start_time = None
+server_online = False
 
 # Define emojis
 GREEN_DOT = "<:green_circle:1252142135581163560>"
 RED_DOT = "<:red_circle:1252142033758459011>"
 
-def has_authorized_role():
-    """Check if the user has the authorized role."""
-    async def predicate(ctx):
-        if ctx.guild is None:
-           return False
-        role = ctx.guild.get_role(AUTHORIZED_ROLE_ID)
-        if role is None:
-           logging.error(f"Error: Authorized role with id: {AUTHORIZED_ROLE_ID} could not be found")
-           return False
-        return role in ctx.author.roles
-    return commands.check(predicate)
+def is_admin():
+    """Check if the user has the admin role."""
+    async def predicate(interaction: discord.Interaction):
+      if interaction.guild is None:
+        return False
+      role = interaction.guild.get_role(ADMIN_ROLE_ID)
+      if role is None:
+        logging.error(f"Error: Admin role with id: {ADMIN_ROLE_ID} could not be found")
+        return False
+      return role in interaction.user.roles
+    return app_commands.check(predicate)
 
 async def send_webhook_message(message):
     """Sends a message to the Discord webhook."""
@@ -52,7 +54,7 @@ async def send_webhook_message(message):
         response = requests.post(WEBHOOK_URL, json=data)
         response.raise_for_status()
         logging.info(f"Webhook message sent successfully, response: {response.status_code}")
-        webhook_message_id = response.json()['id'] # Store the id of the webhook
+        webhook_message_id = response.json()['id']
     except requests.exceptions.RequestException as e:
         logging.error(f"Error sending webhook message: {e}")
         return False
@@ -73,7 +75,7 @@ async def remove_webhook_message():
 
 async def fetch_player_data():
     """Fetches player count and player list data from the API with backoff retry."""
-    global server_offline_message_sent, webhook_message_id, server_start_time
+    global server_offline_message_sent, webhook_message_id, server_start_time, server_online
     player_count_url = f"{API_BASE_URL}/player/count?password={API_PASSWORD}"
     player_list_url = f"{API_BASE_URL}/player/list?password={API_PASSWORD}"
     
@@ -87,11 +89,16 @@ async def fetch_player_data():
             list_response = requests.get(player_list_url, timeout=5)
             list_response.raise_for_status()
             list_data = list_response.json()
+
             if server_offline_message_sent:
               await remove_webhook_message()
               server_offline_message_sent = False
-            if server_start_time is None:
+              
+            server_online = True
+            
+            if not server_start_time:
                 server_start_time = datetime.utcnow()
+            
             return count_data, list_data, True
     
         except requests.exceptions.RequestException as e:
@@ -101,6 +108,7 @@ async def fetch_player_data():
                 await send_webhook_message("Server cannot be reached. It has either crashed or restarted.")
                 server_offline_message_sent = True
                 server_start_time = None
+                server_online = False
               return None, None, False
             retry_delay = (2 ** attempt) + random.uniform(0,1)
             await asyncio.sleep(retry_delay)
@@ -121,6 +129,7 @@ def format_uptime():
 async def create_embed(count_data, list_data, server_online):
     """Creates a Discord Embed with formatted player data."""
     uptime = format_uptime()
+
     if not server_online:
         embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.red())
         embed.add_field(name="Server Status", value=f"{RED_DOT} Server is Offline", inline=False)
@@ -131,12 +140,10 @@ async def create_embed(count_data, list_data, server_online):
     num_players = count_data["data"]["num_players"]
     player_list = list_data["data"]
 
-
     embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.green())
     embed.add_field(name="Server Status", value=f"{GREEN_DOT} Server is Online", inline=False)
     embed.add_field(name="Uptime", value=uptime, inline=False)
     embed.add_field(name="Players Online", value=f"{num_players}", inline=False)
-
     
     if player_list:
         player_names = "\n".join([player["name"] for _, player in player_list.items()])
@@ -160,27 +167,36 @@ async def create_banlist_embed(ban_data):
     return embed
 
 @bot.tree.command(name="showmtstats", description="Activates server statistics updates in the current channel.")
-@has_authorized_role()
+@is_admin()
 async def show_mt_stats(interaction: discord.Interaction):
-    global tracking_channel_id, status_message_id
+    global tracking_channel_id, status_message_id, server_online
     tracking_channel_id = interaction.channel_id
 
     if not update_stats.is_running():
        await interaction.response.defer()
        count_data, list_data, server_online = await fetch_player_data()
-       embed = await create_embed(count_data, list_data, server_online)
-       if embed:
+       if server_online:
+        embed = await create_embed(count_data, list_data, server_online)
+        if embed:
             # Convert the interaction to context
             ctx = await commands.Context.from_interaction(interaction)
-            status_message = await ctx.send(embed=embed) # Use ctx.send to get the message object
-            status_message_id = status_message.id # Store only the message ID
-            update_stats.start() # Start the task
+            status_message = await ctx.send(embed=embed)
+            status_message_id = status_message.id
+            update_stats.start()
             await interaction.followup.send("Player statistics updates started in this channel.", ephemeral=True)
+       else:
+           embed = await create_embed(None, None, server_online)
+           # Convert the interaction to context
+           ctx = await commands.Context.from_interaction(interaction)
+           status_message = await ctx.send(embed=embed)
+           status_message_id = status_message.id
+           update_stats.start()
+           await interaction.followup.send("Server is offline. Stats started", ephemeral=True)
     else:
         await interaction.response.send_message("Player statistics updates already running in this channel", ephemeral=True)
 
 @bot.tree.command(name="removemtstats", description="Deactivates server statistics updates.")
-@has_authorized_role()
+@is_admin()
 async def remove_mt_stats(interaction: discord.Interaction):
     global tracking_channel_id, status_message_id
     if update_stats.is_running() and tracking_channel_id == interaction.channel_id:
@@ -196,92 +212,55 @@ async def remove_mt_stats(interaction: discord.Interaction):
 
 @tasks.loop(seconds=30)
 async def update_stats():
-    global status_message_id, tracking_channel_id
+    global status_message_id, tracking_channel_id, server_start_time, server_online
     if not tracking_channel_id or not status_message_id:
         return
+
     try:
       
-        count_data, list_data, server_online = await fetch_player_data()
-        embed = await create_embed(count_data, list_data, server_online)
-        if embed:
-            try:
-                channel = bot.get_channel(tracking_channel_id)
-                if channel:
-                    message = await channel.fetch_message(status_message_id) # fetch the message using the stored ID
-                    await message.edit(embed=embed) # edit the message
-                else:
-                    logging.error(f"Channel with id: {tracking_channel_id} not found, cannot update status message")
-                    status_message_id = None
-                    update_stats.stop()
-            except discord.errors.NotFound as e:
-              logging.error(f"Error editing message, message not found: {e}")
-              status_message_id = None
-              update_stats.stop()
-            except discord.errors.HTTPException as e:
-              logging.error(f"Error editing message: {e}")
-              status_message_id = None
-              update_stats.stop()
-        else:
-            logging.error("Error getting api data, will retry in 2 minutes")
-            update_stats.change_interval(seconds=120)
-            await asyncio.sleep(120)
-            update_stats.change_interval(seconds=30)
+      count_data, list_data, server_online = await fetch_player_data()
+      
+      embed = await create_embed(count_data, list_data, server_online)
+      if embed:
+        try:
+            channel = bot.get_channel(tracking_channel_id)
+            if channel:
+                message = await channel.fetch_message(status_message_id)
+                await message.edit(embed=embed)
+            else:
+                logging.error(f"Channel with id: {tracking_channel_id} not found, cannot update status message")
+                status_message_id = None
+                update_stats.stop()
+        except discord.errors.NotFound as e:
+          logging.error(f"Error editing message, message not found: {e}")
+          status_message_id = None
+          update_stats.stop()
+        except discord.errors.HTTPException as e:
+          logging.error(f"Error editing message: {e}")
+          status_message_id = None
+          update_stats.stop()
+          
     except Exception as e:
       logging.error(f"Error during update_stats task: {e}", exc_info=True)
       status_message_id = None
       update_stats.stop()
 
-
 @bot.tree.command(name="mtmsg", description="Sends a message to the game server chat.")
-@has_authorized_role()
+@is_admin()
 async def mt_msg(interaction: discord.Interaction, message: str):
-    url = f"{API_BASE_URL}/chat?password={API_PASSWORD}&message={message.replace(' ', '+')}"
+    url = f"{API_BASE_URL}/chat?password={API_PASSWORD}&message={message}"
     try:
         await interaction.response.defer()
         response = requests.post(url)
         response.raise_for_status()
-        logging.info(f"Sent message to server: {message}, Response code: {response.status_code}")
+        logging.info(f"Sent message to server (command): {message}, Response code: {response.status_code}")
         await interaction.followup.send(f"Message sent to server chat: `{message}`")
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error sending message: {e}, response: {e.response}")
+        logging.error(f"Error sending message (command): {e}, response: {e.response}")
         await interaction.followup.send(f"Error sending message: {e}", ephemeral=True)
 
-@bot.tree.command(name="mtban", description="Bans a player from the server.")
-@has_authorized_role()
-async def mt_ban(interaction: discord.Interaction, player_name: str):
-    player_list_url = f"{API_BASE_URL}/player/list?password={API_PASSWORD}"
-    try:
-        await interaction.response.defer()
-        list_response = requests.get(player_list_url)
-        list_response.raise_for_status()
-        list_data = list_response.json()
-        if list_data and list_data['data']:
-            player_found = False
-            for _, player in list_data['data'].items():
-                if player['name'] == player_name:
-                    unique_id = player['unique_id']
-                    player_found = True
-                    ban_url = f"{API_BASE_URL}/player/ban?password={API_PASSWORD}&unique_id={unique_id}"
-                    try:
-                        ban_response = requests.post(ban_url)
-                        ban_response.raise_for_status()
-                        logging.info(f"Banned player: {player_name}, Response code: {ban_response.status_code}")
-                        await interaction.followup.send(f"Player `{player_name}` banned from server.")
-                        break
-                    except requests.exceptions.RequestException as e:
-                        logging.error(f"Error banning player: {e}")
-                        await interaction.followup.send(f"Error banning player: {e}", ephemeral=True)
-                        break
-            if not player_found:
-                await interaction.followup.send(f"Player with name `{player_name}` not found on the server.", ephemeral=True)
-        else:
-            await interaction.followup.send("Error: Could not get player list", ephemeral=True)
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error retrieving player list: {e}")
-        await interaction.followup.send(f"Error retrieving player list: {e}", ephemeral=True)
-
 @bot.tree.command(name="mtkick", description="Kicks a player from the server.")
-@has_authorized_role()
+@is_admin()
 async def mt_kick(interaction: discord.Interaction, player_name: str):
     player_list_url = f"{API_BASE_URL}/player/list?password={API_PASSWORD}"
     try:
@@ -314,9 +293,8 @@ async def mt_kick(interaction: discord.Interaction, player_name: str):
         logging.error(f"Error retrieving player list: {e}")
         await interaction.followup.send(f"Error retrieving player list: {e}", ephemeral=True)
 
-
 @bot.tree.command(name="mtunban", description="Unbans a player from the server.")
-@has_authorized_role()
+@is_admin()
 async def mt_unban(interaction: discord.Interaction, player_name: str):
     ban_list_url = f"{API_BASE_URL}/player/banlist?password={API_PASSWORD}"
     try:
@@ -350,7 +328,7 @@ async def mt_unban(interaction: discord.Interaction, player_name: str):
         await interaction.followup.send(f"Error retrieving ban list: {e}", ephemeral=True)
 
 @bot.tree.command(name="mtshowbanned", description="Displays a list of banned players")
-@has_authorized_role()
+@is_admin()
 async def mt_showbanned(interaction: discord.Interaction):
     ban_list_url = f"{API_BASE_URL}/player/banlist?password={API_PASSWORD}"
     try:
@@ -363,6 +341,26 @@ async def mt_showbanned(interaction: discord.Interaction):
     except requests.exceptions.RequestException as e:
         logging.error(f"Error retrieving ban list: {e}")
         await interaction.followup.send(f"Error retrieving ban list: {e}", ephemeral=True)
+
+
+@bot.tree.command(name="mtvotekick", description="Initiate a vote kick for a player.")
+async def mt_votekick(interaction: discord.Interaction, player_name: str, reason: str):
+  await interaction.response.send_message("The vote kick feature is not available.", ephemeral=True)
+
+
+@bot.event
+async def on_message(message):
+    """Event that gets called when a message is sent"""
+    await bot.process_commands(message)
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.CheckFailure):
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
+    
+    logging.error(f"Error in app command: {error}")
+    await interaction.response.send_message("An unexpected error occurred.", ephemeral=True)
 
 @bot.event
 async def on_ready():
