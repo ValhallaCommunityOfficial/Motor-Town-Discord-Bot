@@ -140,6 +140,7 @@ async def create_embed(count_data, list_data, server_online):
     num_players = count_data["data"]["num_players"]
     player_list = list_data["data"]
 
+
     embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.green())
     embed.add_field(name="Server Status", value=f"{GREEN_DOT} Server is Online", inline=False)
     embed.add_field(name="Uptime", value=uptime, inline=False)
@@ -215,35 +216,32 @@ async def update_stats():
     global status_message_id, tracking_channel_id, server_start_time, server_online
     if not tracking_channel_id or not status_message_id:
         return
-
+    
     try:
-      
       count_data, list_data, server_online = await fetch_player_data()
-      
       embed = await create_embed(count_data, list_data, server_online)
-      if embed:
-        try:
-            channel = bot.get_channel(tracking_channel_id)
-            if channel:
-                message = await channel.fetch_message(status_message_id)
-                await message.edit(embed=embed)
-            else:
-                logging.error(f"Channel with id: {tracking_channel_id} not found, cannot update status message")
-                status_message_id = None
-                update_stats.stop()
-        except discord.errors.NotFound as e:
-          logging.error(f"Error editing message, message not found: {e}")
-          status_message_id = None
-          update_stats.stop()
-        except discord.errors.HTTPException as e:
-          logging.error(f"Error editing message: {e}")
-          status_message_id = None
-          update_stats.stop()
-          
     except Exception as e:
-      logging.error(f"Error during update_stats task: {e}", exc_info=True)
-      status_message_id = None
-      update_stats.stop()
+       logging.error(f"Error fetching player data for stats: {e}")
+       server_online = False
+       embed = await create_embed(None, None, server_online)
+      
+    try:    
+      channel = bot.get_channel(tracking_channel_id)
+      if channel:
+          message = await channel.fetch_message(status_message_id)
+          await message.edit(embed=embed)
+      else:
+          logging.error(f"Channel with id: {tracking_channel_id} not found, cannot update status message")
+          status_message_id = None
+          update_stats.stop()
+    except discord.errors.NotFound as e:
+        logging.error(f"Error editing message, message not found: {e}")
+        status_message_id = None
+        update_stats.stop()
+    except discord.errors.HTTPException as e:
+        logging.error(f"Error editing message: {e}")
+        status_message_id = None
+        update_stats.stop()
 
 @bot.tree.command(name="mtmsg", description="Sends a message to the game server chat.")
 @is_admin()
@@ -258,6 +256,39 @@ async def mt_msg(interaction: discord.Interaction, message: str):
     except requests.exceptions.RequestException as e:
         logging.error(f"Error sending message (command): {e}, response: {e.response}")
         await interaction.followup.send(f"Error sending message: {e}", ephemeral=True)
+@bot.tree.command(name="mtban", description="Bans a player from the server.")
+@is_admin()
+async def mt_ban(interaction: discord.Interaction, player_name: str):
+    player_list_url = f"{API_BASE_URL}/player/list?password={API_PASSWORD}"
+    try:
+        await interaction.response.defer()
+        list_response = requests.get(player_list_url)
+        list_response.raise_for_status()
+        list_data = list_response.json()
+        if list_data and list_data['data']:
+            player_found = False
+            for _, player in list_data['data'].items():
+                if player['name'] == player_name:
+                    unique_id = player['unique_id']
+                    player_found = True
+                    ban_url = f"{API_BASE_URL}/player/ban?password={API_PASSWORD}&unique_id={unique_id}"
+                    try:
+                        ban_response = requests.post(ban_url)
+                        ban_response.raise_for_status()
+                        logging.info(f"Banned player: {player_name}, Response code: {ban_response.status_code}")
+                        await interaction.followup.send(f"Player `{player_name}` banned from server.")
+                        break
+                    except requests.exceptions.RequestException as e:
+                        logging.error(f"Error banning player: {e}")
+                        await interaction.followup.send(f"Error banning player: {e}", ephemeral=True)
+                        break
+            if not player_found:
+                await interaction.followup.send(f"Player with name `{player_name}` not found on the server.", ephemeral=True)
+        else:
+            await interaction.followup.send("Error: Could not get player list", ephemeral=True)
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error retrieving player list: {e}")
+        await interaction.followup.send(f"Error retrieving player list: {e}", ephemeral=True)
 
 @bot.tree.command(name="mtkick", description="Kicks a player from the server.")
 @is_admin()
@@ -342,16 +373,10 @@ async def mt_showbanned(interaction: discord.Interaction):
         logging.error(f"Error retrieving ban list: {e}")
         await interaction.followup.send(f"Error retrieving ban list: {e}", ephemeral=True)
 
-
-@bot.tree.command(name="mtvotekick", description="Initiate a vote kick for a player.")
-async def mt_votekick(interaction: discord.Interaction, player_name: str, reason: str):
-  await interaction.response.send_message("The vote kick feature is not available.", ephemeral=True)
-
-
 @bot.event
 async def on_message(message):
     """Event that gets called when a message is sent"""
-    await bot.process_commands(message)
+    pass
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
