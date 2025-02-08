@@ -29,6 +29,7 @@ server_offline_message_sent = False
 webhook_message_id = None
 server_start_time = None
 server_online = False
+cached_player_list = None #add global variable to store the player list
 
 # Define emojis
 GREEN_DOT = "<:green_circle:1252142135581163560>"
@@ -75,7 +76,7 @@ async def remove_webhook_message():
 
 async def fetch_player_data():
     """Fetches player count and player list data from the API with backoff retry."""
-    global server_offline_message_sent, webhook_message_id, server_start_time, server_online
+    global server_offline_message_sent, webhook_message_id, server_start_time, server_online, cached_player_list
     player_count_url = f"{API_BASE_URL}/player/count?password={API_PASSWORD}"
     player_list_url = f"{API_BASE_URL}/player/list?password={API_PASSWORD}"
     
@@ -93,7 +94,14 @@ async def fetch_player_data():
             if server_offline_message_sent:
               await remove_webhook_message()
               server_offline_message_sent = False
-              
+              logging.info("Server back online detected")
+
+              # **RESET EVERYTHING HERE!**
+              server_start_time = datetime.utcnow() # Reset uptime
+              server_online = True
+              cached_player_list = None #Clear cache
+              logging.info("Server online status and uptime reset")
+            
             server_online = True
             
             if not server_start_time:
@@ -109,6 +117,7 @@ async def fetch_player_data():
                 server_offline_message_sent = True
                 server_start_time = None
                 server_online = False
+                cached_player_list = None # clear the cache
               return None, None, False
             retry_delay = (2 ** attempt) + random.uniform(0,1)
             await asyncio.sleep(retry_delay)
@@ -129,6 +138,7 @@ def format_uptime():
 async def create_embed(count_data, list_data, server_online):
     """Creates a Discord Embed with formatted player data."""
     uptime = format_uptime()
+    global cached_player_list
 
     if not server_online:
         embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.red())
@@ -140,6 +150,7 @@ async def create_embed(count_data, list_data, server_online):
     num_players = count_data["data"]["num_players"]
     player_list = list_data["data"]
 
+    cached_player_list = player_list #stores player list
 
     embed = discord.Embed(title="Motor Town Server Status", color=discord.Color.green())
     embed.add_field(name="Server Status", value=f"{GREEN_DOT} Server is Online", inline=False)
